@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/celestiaorg/nmt"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
@@ -74,58 +75,61 @@ type GetIDsResult struct {
 	Timestamp time.Time
 }
 
-// API defines the jsonrpc DA service module API
-type DAAPI struct {
+// BlobJSON is the JSON representation of a blob accepted by celestia-node's blob module.
+type BlobJSON struct {
+	Namespace    Namespace  `json:"namespace"`
+	Data         []byte     `json:"data"`
+	ShareVersion uint8      `json:"share_version"`
+	Commitment   Commitment `json:"commitment,omitempty"`
+	Signer       []byte     `json:"signer,omitempty"`
+	Index        int        `json:"index"`
+}
+
+// BlobProofJSON is the JSON representation of a blob inclusion proof returned by the blob module.
+type BlobProofJSON []nmt.Proof
+
+// SubmitOptions mirrors celestia-node's blob.SubmitOptions, which is an alias of state.TxConfig.
+type SubmitOptions struct {
+	GasPrice      float64 `json:"gas_price,omitempty"`
+	IsGasPriceSet bool    `json:"is_gas_price_set,omitempty"`
+	MaxGasPrice   float64 `json:"max_gas_price,omitempty"`
+	Gas           uint64  `json:"gas,omitempty"`
+}
+
+// BlobAPI defines the jsonrpc blob service module API.
+type BlobAPI struct {
 	Internal struct {
-		MaxBlobSize       func(ctx context.Context) (uint64, error)                                     `perm:"read"`
-		Get               func(ctx context.Context, ids []ID, ns Namespace) ([]Blob, error)             `perm:"read"`
-		GetIDs            func(ctx context.Context, height uint64, ns Namespace) (*GetIDsResult, error) `perm:"read"`
-		GetProofs         func(ctx context.Context, ids []ID, ns Namespace) ([]Proof, error)            `perm:"read"`
-		Commit            func(ctx context.Context, blobs []Blob, ns Namespace) ([]Commitment, error)   `perm:"read"`
-		Validate          func(context.Context, []ID, []Proof, Namespace) ([]bool, error)               `perm:"read"`
-		Submit            func(context.Context, []Blob, float64, Namespace) ([]ID, error)               `perm:"write"`
-		SubmitWithOptions func(context.Context, []Blob, float64, Namespace, []byte) ([]ID, error)       `perm:"write"`
+		Submit   func(context.Context, []*BlobJSON, *SubmitOptions) (uint64, error)                 `perm:"write"`
+		Get      func(context.Context, uint64, Namespace, Commitment) (*BlobJSON, error)            `perm:"read"`
+		GetAll   func(context.Context, uint64, []Namespace) ([]*BlobJSON, error)                    `perm:"read"`
+		GetProof func(context.Context, uint64, Namespace, Commitment) (*BlobProofJSON, error)       `perm:"read"`
+		Included func(context.Context, uint64, Namespace, *BlobProofJSON, Commitment) (bool, error) `perm:"read"`
 	}
 }
 
-// MaxBlobSize returns the max blob size
-func (api *DAAPI) MaxBlobSize(ctx context.Context) (uint64, error) {
-	return api.Internal.MaxBlobSize(ctx)
+// Submit submits the given blobs to the DA layer and returns the height they were included at.
+func (api *BlobAPI) Submit(ctx context.Context, blobs []*BlobJSON, options *SubmitOptions) (uint64, error) {
+	return api.Internal.Submit(ctx, blobs, options)
 }
 
-// Get returns Blob for each given ID, or an error.
-func (api *DAAPI) Get(ctx context.Context, ids []ID, ns Namespace) ([]Blob, error) {
-	return api.Internal.Get(ctx, ids, ns)
+// Get returns the blob at the given height, namespace and commitment.
+func (api *BlobAPI) Get(ctx context.Context, height uint64, ns Namespace, commitment Commitment) (*BlobJSON, error) {
+	return api.Internal.Get(ctx, height, ns, commitment)
 }
 
-// GetIDs returns IDs of all Blobs located in DA at given height.
-func (api *DAAPI) GetIDs(ctx context.Context, height uint64, ns Namespace) (*GetIDsResult, error) {
-	return api.Internal.GetIDs(ctx, height, ns)
+// GetAll returns all blobs at the given height under the given namespaces.
+func (api *BlobAPI) GetAll(ctx context.Context, height uint64, ns []Namespace) ([]*BlobJSON, error) {
+	return api.Internal.GetAll(ctx, height, ns)
 }
 
-// GetProofs returns inclusion Proofs for Blobs specified by their IDs.
-func (api *DAAPI) GetProofs(ctx context.Context, ids []ID, ns Namespace) ([]Proof, error) {
-	return api.Internal.GetProofs(ctx, ids, ns)
+// GetProof returns the inclusion proof for the blob at the given height, namespace and commitment.
+func (api *BlobAPI) GetProof(ctx context.Context, height uint64, ns Namespace, commitment Commitment) (*BlobProofJSON, error) {
+	return api.Internal.GetProof(ctx, height, ns, commitment)
 }
 
-// Commit creates a Commitment for each given Blob.
-func (api *DAAPI) Commit(ctx context.Context, blobs []Blob, ns Namespace) ([]Commitment, error) {
-	return api.Internal.Commit(ctx, blobs, ns)
-}
-
-// Validate validates Commitments against the corresponding Proofs. This should be possible without retrieving the Blobs.
-func (api *DAAPI) Validate(ctx context.Context, ids []ID, proofs []Proof, ns Namespace) ([]bool, error) {
-	return api.Internal.Validate(ctx, ids, proofs, ns)
-}
-
-// Submit submits the Blobs to Data Availability layer.
-func (api *DAAPI) Submit(ctx context.Context, blobs []Blob, gasPrice float64, ns Namespace) ([]ID, error) {
-	return api.Internal.Submit(ctx, blobs, gasPrice, ns)
-}
-
-// SubmitWithOptions submits the Blobs to Data Availability layer.
-func (api *DAAPI) SubmitWithOptions(ctx context.Context, blobs []Blob, gasPrice float64, ns Namespace, options []byte) ([]ID, error) {
-	return api.Internal.SubmitWithOptions(ctx, blobs, gasPrice, ns, options)
+// Included checks whether the blob is included at the given height, namespace and commitment.
+func (api *BlobAPI) Included(ctx context.Context, height uint64, ns Namespace, proof *BlobProofJSON, commitment Commitment) (bool, error) {
+	return api.Internal.Included(ctx, height, ns, proof, commitment)
 }
 
 // API defines the jsonrpc Header service module API

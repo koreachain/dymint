@@ -2,7 +2,6 @@ package celestia
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,9 +25,6 @@ import (
 	"github.com/dymensionxyz/dymint/types/metrics"
 	uretry "github.com/dymensionxyz/dymint/utils/retry"
 )
-
-// heightLen is a length (in bytes) of serialized height. used in daclient.ID to translate ID to height+commitment
-const heightLen = 8
 
 // DataAvailabilityLayerClient use celestia-node public API.
 type DataAvailabilityLayerClient struct {
@@ -361,7 +357,7 @@ func (c *DataAvailabilityLayerClient) submit(data []byte) (*SubmitMetaData, erro
 	if err != nil {
 		return &SubmitMetaData{}, err
 	}
-	height, commitment := splitID(ids[0])
+	height, commitment := daclient.SplitID(ids[0])
 
 	return &SubmitMetaData{
 		Height:     height,
@@ -393,7 +389,7 @@ func (c *DataAvailabilityLayerClient) retrieveBatches(daMetaData *SubmitMetaData
 	c.logger.Debug("Getting blob from DA.", "height", daMetaData.Height, "namespace", hex.EncodeToString(daMetaData.Namespace), "commitment", hex.EncodeToString(daMetaData.Commitment))
 	var batches []*types.Batch
 
-	id := makeID(daMetaData.Height, daMetaData.Commitment)
+	id := daclient.MakeID(daMetaData.Height, daMetaData.Commitment)
 	blob, err := c.client.Get(ctx, []daclient.ID{id}, daMetaData.Namespace)
 	if err != nil {
 		return da.ResultRetrieveBatch{
@@ -470,7 +466,7 @@ func (c *DataAvailabilityLayerClient) getDAAvailabilityMetaData(daMetaData *Subm
 		return &CheckMetaData{}, err
 	}
 
-	ids := []daclient.ID{makeID(daMetaData.Height, daMetaData.Commitment)}
+	ids := []daclient.ID{daclient.MakeID(daMetaData.Height, daMetaData.Commitment)}
 	daProofs, err := c.client.GetProofs(ctx, ids, daMetaData.Namespace)
 	if err != nil || daProofs[0] == nil {
 		// TODO (srene): Not getting proof means there is no existing data for the namespace and commitment (the commitment is not valid).
@@ -528,7 +524,7 @@ func (c *DataAvailabilityLayerClient) validateInclusion(daMetaData *CheckMetaDat
 	ctx, cancel := context.WithTimeout(c.ctx, c.config.Timeout)
 	defer cancel()
 
-	ids := []daclient.ID{makeID(daMetaData.Height, daMetaData.Commitment)}
+	ids := []daclient.ID{daclient.MakeID(daMetaData.Height, daMetaData.Commitment)}
 	included, err := c.client.Validate(ctx, ids, daMetaData.Proofs, daMetaData.Namespace)
 	if err != nil {
 		return err
@@ -539,21 +535,4 @@ func (c *DataAvailabilityLayerClient) validateInclusion(daMetaData *CheckMetaDat
 		}
 	}
 	return nil
-}
-
-// makeID generates a blob ID, to be used with the light client, defined by height + commitment
-func makeID(height uint64, commitment da.Commitment) daclient.ID {
-	id := make([]byte, heightLen+len(commitment))
-	binary.LittleEndian.PutUint64(id, height)
-	copy(id[heightLen:], commitment)
-	return id
-}
-
-// splitID returns height + commitment from the daclient ID
-func splitID(id daclient.ID) (uint64, da.Commitment) {
-	if len(id) <= heightLen {
-		return 0, nil
-	}
-	commitment := id[heightLen:]
-	return binary.LittleEndian.Uint64(id[:heightLen]), commitment
 }

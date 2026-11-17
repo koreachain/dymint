@@ -10,6 +10,7 @@ require (
 	github.com/availproject/avail-go-sdk v0.2.0-rc7
 	github.com/avast/retry-go/v4 v4.5.0
 	github.com/block-vision/sui-go-sdk v1.0.7-0.20250131122505-89eddd839b21
+	github.com/celestiaorg/go-square v1.1.1
 	github.com/celestiaorg/go-square/merkle v0.0.0-20240429192549-dea967e1533b
 	github.com/cosmos/cosmos-sdk v0.46.16
 	github.com/cosmos/ibc-go/v6 v6.2.1
