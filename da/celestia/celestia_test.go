@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/dymensionxyz/dymint/da/registry"
 	"github.com/dymensionxyz/dymint/store"
 	"github.com/dymensionxyz/dymint/types"
+	uretry "github.com/dymensionxyz/dymint/utils/retry"
 )
 
 const mockDaBlockTime = 100 * time.Millisecond
@@ -250,6 +252,63 @@ func TestRetrievalWrongCommitment(t *testing.T) {
 
 	availRes := retriever.CheckBatchAvailability(h1.ToPath())
 	assert.ErrorIs(availRes.Error, da.ErrUnableToGetProofs)
+}
+
+func TestSubmitBatchRetriesAvailabilityCheckWithoutResubmit(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
+	pubsubServer := pubsub.NewServer()
+	require.NoError(pubsubServer.Start())
+	t.Cleanup(func() { require.NoError(pubsubServer.Stop()) })
+
+	dalc := registry.GetClient("celestia")
+	config := celestia.Config{
+		BaseURL:        "http://localhost:26658",
+		Timeout:        30 * time.Second,
+		GasPrices:      celestia.DefaultGasPrices,
+		NamespaceIDStr: "0000000000000000ffff",
+	}
+	require.NoError(config.InitNamespaceID())
+	conf, err := json.Marshal(config)
+	require.NoError(err)
+
+	mockRPCClient := mocks.NewMockDAClient(t)
+	err = dalc.Init(conf, pubsubServer, store.NewDefaultInMemoryKVStore(), log.TestingLogger(),
+		celestia.WithRPCClient(mockRPCClient),
+		celestia.WithRPCAttempts(1),
+		celestia.WithRPCRetryDelay(time.Second*2),
+		celestia.WithSubmitBackoff(uretry.NewBackoffConfig(
+			uretry.WithInitialDelay(time.Millisecond),
+			uretry.WithMaxDelay(time.Millisecond),
+		)),
+	)
+	require.NoError(err)
+	require.NoError(dalc.Start())
+
+	batch := &types.Batch{Blocks: []*types.Block{getRandomBlock(1, 10)}}
+
+	nIDSize := 1
+	tree := exampleNMT(nIDSize, true, 1, 2, 3, 4)
+	proof, err := tree.ProveNamespace(config.NamespaceID.Bytes())
+	require.NoError(err)
+	jsonProofs, err := testutil.GetMockJsonNMTProofs(&proof)
+	require.NoError(err)
+
+	ids := []daclient.ID{[]byte("testingId")}
+
+	// A single submission is made; the following availability checks fail twice
+	// (e.g. the node is temporarily behind) and then succeed.
+	mockRPCClient.On("Submit", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(ids, nil).Once()
+	mockRPCClient.On("GetByHeight", mock.Anything, mock.Anything).Return(nil, errors.New("header not available")).Twice()
+	mockRPCClient.On("GetByHeight", mock.Anything, mock.Anything).Return(testutil.GetMockExtenderHeader(), nil).Once()
+	mockRPCClient.On("GetProofs", mock.Anything, mock.Anything, mock.Anything).Return(jsonProofs, nil).Once()
+	mockRPCClient.On("Validate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]bool{true}, nil).Once()
+
+	res := dalc.SubmitBatch(batch)
+
+	assert.Equal(da.StatusSuccess, res.Code)
+	mockRPCClient.AssertNumberOfCalls(t, "Submit", 1)
 }
 
 func setDAandMock(t *testing.T) (*mocks.MockDAClient, da.DataAvailabilityLayerClient, []byte) {

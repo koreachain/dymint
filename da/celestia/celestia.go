@@ -191,13 +191,27 @@ func (c *DataAvailabilityLayerClient) SubmitBatch(batch *types.Batch) da.ResultS
 
 			c.logger.Debug("Submitted blob to DA successfully.")
 
-			checkMetadata, err := c.checkBatchAvailability(daMetaData)
-			if err != nil {
+			// The blob has already been submitted, so only retry the availability
+			// check. Submitting again on a check failure would create a new blob
+			// with the same data on every attempt and drain the signer balance.
+			var checkMetadata *CheckMetaData
+			for {
+				checkMetadata, err = c.checkBatchAvailability(daMetaData)
+				if err == nil {
+					break
+				}
+
 				c.logger.Error("Check batch availability: submitted batch but did not get availability success status.", "error", err)
 				metrics.RollappConsecutiveFailedDASubmission.Inc()
-				backoff.Sleep()
-				continue
+
+				select {
+				case <-c.ctx.Done():
+					c.logger.Debug("Context cancelled.")
+					return da.ResultSubmitBatch{}
+				case <-time.After(backoff.Delay()):
+				}
 			}
+
 			daMetaData.Root = checkMetadata.Root
 			daMetaData.Index = checkMetadata.Index
 			daMetaData.Length = checkMetadata.Length
